@@ -5,6 +5,8 @@ scipy
 matplotlib
 xlsxwriter
 reportlab
+openpyxl
+
 
 
 
