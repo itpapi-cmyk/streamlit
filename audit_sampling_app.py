@@ -1,3 +1,4 @@
+# Forcing rebuilt on Streamlit Cloud
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -275,3 +276,4 @@ if st.button("Calcola Key Items e MUS"):
         file_name="riepilogo_key_mus.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
