@@ -1,8 +1,7 @@
-Streamlit
+streamlit
 pandas
 numpy
-matplotlib
-openpyxl
-reportlab
-xlsxwriter
 scipy
+matplotlib
+xlsxwriter
+reportlab
