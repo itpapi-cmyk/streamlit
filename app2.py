@@ -22,7 +22,9 @@ st.set_page_config(
     layout="wide"
 )
 
+
 st.title("Selezione campione – Key Items e Items")
+st.markdown("<span style='color:blue;'>Il file da caricare deve riportare nella prima riga la descrizione delle colonne (es. codice, descrizione, importo...)</span>", unsafe_allow_html=True)
 
 with st.sidebar.expander("📘 Metodologia e funzionamento del programma"):
     st.markdown("""
@@ -204,18 +206,22 @@ confidence_level = st.sidebar.number_input("Confidence Level (%)", 1, 100, 80)
 
 
 
-# Sidebar – metodo selezione
+
+
+
+# Metodo selezione Items (uniformato a Parametri di campionamento)
+st.sidebar.header("Metodo selezione Items")
 metodo = st.sidebar.radio(
-    "Metodo selezione Items",
+    "",
     ["MUS", "Intervallo", "Casuale"],
     key="key_metodo"
 )
 
 # Opzione per starting point automatico o manuale (solo MUS e Intervallo)
-st.sidebar.header("Opzioni Starting Point")
 manual_starting_point = None
 starting_point_mode = None
 if metodo in ["MUS", "Intervallo"]:
+    st.sidebar.markdown("Opzioni Starting Point")
     starting_point_mode = st.sidebar.radio(
         "Selezione Starting Point",
         ["Automatica", "Manuale"],
@@ -231,11 +237,6 @@ if metodo in ["MUS", "Intervallo"]:
             format="%.2f"
         )
 
-metodo = st.sidebar.radio(
-    "Metodo selezione Items",
-    ["MUS", "Intervallo", "Casuale"]
-)
-
 # =====================
 # Normalizzazione dati
 # =====================
@@ -248,6 +249,15 @@ df_base = df.copy().reset_index(drop=True)
 # Dataset ordinato SOLO per MUS
 df_mus = df.sort_values(by=valore_col, ascending=False).reset_index(drop=True)
 
+# =====================
+# Dataset per visualizzazione Universo (interi, no decimali)
+# =====================
+df_universo_view = df_base.copy()
+df_universo_view[valore_col] = (
+    df_universo_view[valore_col]
+    .round(0)
+    .astype("int64")
+)
 
 # =====================
 # UNIVERSO
@@ -260,7 +270,9 @@ top5_val = df_base.sort_values(by=valore_col, ascending=False).head(5)[valore_co
 top5_perc = top5_val / tot_valore * 100 if tot_items >= 5 else 100
 
 st.subheader("Universo completo")
-st.dataframe(df_base, width="stretch")
+st.dataframe(df_universo_view, width="stretch")
+
+
 
 c1, c2, c3 = st.columns(3)
 c1.metric("Totale items", tot_items)
@@ -330,8 +342,10 @@ if st.button("Calcola selezione campione"):
             selected_items = residuo.iloc[start_idx::step].head(num_items)
             starting_point = start_idx
         else:
-            selected_items = residuo.iloc[::step].head(num_items)
-            starting_point = 1
+            np.random.seed(42)
+            start_idx = np.random.randint(0, step)
+            selected_items = residuo.iloc[start_idx::step].head(num_items)
+            starting_point = start_idx
 
     elif metodo == "Casuale":
         residuo = df_base.drop(key_items.index)
@@ -352,6 +366,7 @@ if st.button("Calcola selezione campione"):
     # RIEPILOGO
     # =====================
     st.subheader("Riepilogo selezione")
+    st.write(f"Materialità: € {materialita:,.0f}  |  Confidence level: {confidence_level}%")
     riepilogo = pd.DataFrame({
         "Categoria": ["Universo", "Key Items", "Items selezionati"],
         "Numero items": [tot_items, len(key_items), len(selected_items)],
@@ -370,17 +385,28 @@ if st.button("Calcola selezione campione"):
     st.table(riepilogo)
 
     st.subheader("Key Items")
-    st.dataframe(key_items[[codice_col, descr_col, valore_col]], width="stretch")
+    key_items_view = key_items[[codice_col, descr_col, valore_col]].copy()
+    key_items_view[valore_col] = key_items_view[valore_col].round(0).astype(int)
+    st.dataframe(key_items_view, width="stretch")
 
     st.subheader("Items selezionati")
-    st.dataframe(selected_items[[codice_col, descr_col, valore_col]], width="stretch")
+    selected_items_view = selected_items[[codice_col, descr_col, valore_col]].copy()
+    selected_items_view[valore_col] = selected_items_view[valore_col].round(0).astype(int)
+    st.dataframe(selected_items_view, width="stretch")
 
     # =====================
     # EXPORT EXCEL
     # =====================
     excel_buffer = BytesIO()
     with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
-        riepilogo.to_excel(writer, sheet_name="Riepilogo", index=False)
+        # Sheet Riepilogo: aggiungo materialità e confidence level sopra la tabella
+        info_df = pd.DataFrame({
+            "Parametro": ["Materialità", "Confidence level"],
+            "Valore": [f"€ {materialita:,.0f}", f"{confidence_level}%"]
+        })
+        info_df.to_excel(writer, sheet_name="Riepilogo", index=False, startrow=0)
+        riepilogo.to_excel(writer, sheet_name="Riepilogo", index=False, startrow=info_df.shape[0]+2)
+
         # valori numerici senza decimali
         key_items_export = key_items[[codice_col, descr_col, valore_col]].copy()
         key_items_export[valore_col] = key_items_export[valore_col].round(0).astype(int)
@@ -410,6 +436,7 @@ if st.button("Calcola selezione campione"):
         doc.add_paragraph(f"Metodo: {metodo}")
         if starting_point is not None:
             doc.add_paragraph(f"Starting point: {starting_point:.2f}")
+        doc.add_paragraph(f"Materialità: € {materialita:,.0f}  |  Confidence level: {confidence_level}%")
         doc.add_paragraph("\nRiepilogo selezione")
         table = doc.add_table(rows=riepilogo.shape[0]+1, cols=riepilogo.shape[1])
         for j, col in enumerate(riepilogo.columns):
