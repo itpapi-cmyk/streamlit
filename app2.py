@@ -150,15 +150,41 @@ Il software rappresenta uno **strumento di supporto operativo**, conforme ai pri
 """)
 
 # =====================
-# Upload file
+# Upload file (Excel o CSV)
 # =====================
-uploaded_file = st.file_uploader("Carica file Excel", type=["xlsx"])
+uploaded_file = st.file_uploader("Carica file Excel o CSV", type=["xlsx", "csv"])
 if uploaded_file is None:
     st.stop()
 
-df = pd.read_excel(uploaded_file)
+# Leggi il file in base all'estensione
+
+import os
+filename = uploaded_file.name
+ext = os.path.splitext(filename)[1].lower()
+if ext == ".xlsx":
+    df = pd.read_excel(uploaded_file)
+elif ext == ".csv":
+    import pandas.errors
+    # Prova con vari separatori: virgola, punto e virgola, tab
+    found = False
+    for sep in [',', ';', '\t']:
+        uploaded_file.seek(0)
+        try:
+            df = pd.read_csv(uploaded_file, sep=sep)
+            if len(df.columns) > 1:
+                found = True
+                break
+        except pandas.errors.ParserError:
+            continue
+    if not found:
+        st.error("Il file CSV sembra avere una sola colonna o non è ben formattato. Prova a salvare il file con separatore virgola, punto e virgola o tab.")
+        st.stop()
+else:
+    st.error("Formato file non supportato. Carica un file .xlsx o .csv.")
+    st.stop()
+
 if df.empty:
-    st.error("File Excel vuoto.")
+    st.error("File caricato vuoto.")
     st.stop()
 
 # =====================
@@ -171,16 +197,32 @@ data_ora = datetime.now().strftime("%d/%m/%Y %H:%M")
 # =====================
 # Sidebar – mappatura colonne
 # =====================
+
 st.sidebar.header("Mappatura colonne")
 colonne = df.columns.tolist()
-
+if len(colonne) < 3:
+    st.error("Il file deve contenere almeno 3 colonne (Codice, Descrizione, Valore). Colonne trovate: " + ", ".join(colonne))
+    st.stop()
 codice_col = st.sidebar.selectbox("Colonna Codice", colonne, index=0)
-descr_col = st.sidebar.selectbox("Colonna Descrizione", colonne, index=1)
-valore_col = st.sidebar.selectbox("Colonna Valore", colonne, index=2)
+descr_col = st.sidebar.selectbox("Colonna Descrizione", colonne, index=1 if len(colonne) > 1 else 0)
+valore_col = st.sidebar.selectbox("Colonna Valore", colonne, index=2 if len(colonne) > 2 else 0)
+
 
 if len({codice_col, descr_col, valore_col}) < 3:
     st.warning("Le colonne devono essere diverse.")
     st.stop()
+
+# Mostra il DataFrame subito dopo il caricamento per debug
+st.write("Anteprima dati caricati:")
+st.dataframe(df.head(10))
+
+# =====================
+# Normalizzazione dati
+# =====================
+# Sostituisci la virgola con il punto nella colonna dei valori, rimuovi apici e spazi
+df[valore_col] = df[valore_col].astype(str).str.replace(",", ".").str.replace("'", "").str.strip()
+df[valore_col] = pd.to_numeric(df[valore_col], errors="coerce")
+df = df.dropna(subset=[valore_col])
 
 # =====================
 # Sidebar – parametri
@@ -258,6 +300,8 @@ df_universo_view[valore_col] = (
     .round(0)
     .astype("int64")
 )
+# Imposta l'indice a partire da 1
+df_universo_view.index = range(1, len(df_universo_view) + 1)
 
 # =====================
 # UNIVERSO
@@ -384,14 +428,25 @@ if st.button("Calcola selezione campione"):
     })
     st.table(riepilogo)
 
+
     st.subheader("Key Items")
+
     key_items_view = key_items[[codice_col, descr_col, valore_col]].copy()
-    key_items_view[valore_col] = key_items_view[valore_col].round(0).astype(int)
+    key_items_view[valore_col] = pd.to_numeric(key_items_view[valore_col], errors="coerce")
+    if key_items_view[valore_col].isnull().any():
+        st.warning("Attenzione: alcuni valori nei Key Items non sono numerici e sono stati impostati a NaN.")
+    key_items_view[valore_col] = key_items_view[valore_col].round(0).astype('Int64')
+    key_items_view.index = range(1, len(key_items_view) + 1)
     st.dataframe(key_items_view, width="stretch")
 
     st.subheader("Items selezionati")
+
     selected_items_view = selected_items[[codice_col, descr_col, valore_col]].copy()
-    selected_items_view[valore_col] = selected_items_view[valore_col].round(0).astype(int)
+    selected_items_view[valore_col] = pd.to_numeric(selected_items_view[valore_col], errors="coerce")
+    if selected_items_view[valore_col].isnull().any():
+        st.warning("Attenzione: alcuni valori negli Items selezionati non sono numerici e sono stati impostati a NaN.")
+    selected_items_view[valore_col] = selected_items_view[valore_col].round(0).astype('Int64')
+    selected_items_view.index = range(1, len(selected_items_view) + 1)
     st.dataframe(selected_items_view, width="stretch")
 
     # =====================
@@ -409,11 +464,13 @@ if st.button("Calcola selezione campione"):
 
         # valori numerici senza decimali
         key_items_export = key_items[[codice_col, descr_col, valore_col]].copy()
-        key_items_export[valore_col] = key_items_export[valore_col].round(0).astype(int)
+        key_items_export[valore_col] = pd.to_numeric(key_items_export[valore_col], errors="coerce")
+        key_items_export[valore_col] = key_items_export[valore_col].round(0).astype('Int64')
         key_items_export.to_excel(writer, sheet_name="Key Items", index=False)
 
         selected_items_export = selected_items[[codice_col, descr_col, valore_col]].copy()
-        selected_items_export[valore_col] = selected_items_export[valore_col].round(0).astype(int)
+        selected_items_export[valore_col] = pd.to_numeric(selected_items_export[valore_col], errors="coerce")
+        selected_items_export[valore_col] = selected_items_export[valore_col].round(0).astype('Int64')
         selected_items_export.to_excel(writer, sheet_name="Items selezionati", index=False)
     excel_buffer.seek(0)
 
