@@ -6,6 +6,7 @@ import os
 from io import BytesIO
 from datetime import datetime
 from docx import Document
+from openpyxl import load_workbook
 
 
 def euro(val):
@@ -49,6 +50,87 @@ def parse_number_it(val):
         return np.nan
     n = float(s)
     return -n if neg_parentheses else n
+
+
+def normalize_headers(headers):
+    normalized = []
+    for idx, header in enumerate(headers):
+        name = str(header).strip() if header is not None else ""
+        normalized.append(name or f"Colonna_{idx + 1}")
+    return normalized
+
+
+def with_display_index(df):
+    displayed_df = df.copy()
+    displayed_df.index = pd.RangeIndex(start=1, stop=len(displayed_df) + 1, step=1)
+    return displayed_df
+
+
+def detect_csv_separator(file_bytes):
+    for sep in [",", ";", "\t"]:
+        try:
+            preview_df = pd.read_csv(BytesIO(file_bytes), sep=sep, nrows=5)
+            if len(preview_df.columns) > 1:
+                return sep
+        except Exception:
+            continue
+    return None
+
+
+@st.cache_data(show_spinner=False)
+def get_file_columns(file_bytes, ext):
+    if ext == ".xlsx":
+        wb = load_workbook(BytesIO(file_bytes), read_only=True, data_only=True)
+        try:
+            ws = wb.worksheets[0]
+            header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
+        finally:
+            wb.close()
+        if not header_row:
+            return []
+        return normalize_headers(header_row)
+
+    if ext == ".csv":
+        sep = detect_csv_separator(file_bytes)
+        if sep is None:
+            return []
+        csv_df = pd.read_csv(BytesIO(file_bytes), sep=sep, nrows=0)
+        return normalize_headers(csv_df.columns.tolist())
+
+    return []
+
+
+@st.cache_data(show_spinner=False)
+def load_selected_columns(file_bytes, ext, selected_columns):
+    if ext == ".xlsx":
+        wb = load_workbook(BytesIO(file_bytes), read_only=True, data_only=True)
+        try:
+            ws = wb.worksheets[0]
+            header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
+            if not header_row:
+                return pd.DataFrame(columns=list(selected_columns))
+
+            headers = normalize_headers(header_row)
+            col_idx = [headers.index(col) for col in selected_columns]
+            rows = []
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                rows.append(
+                    {
+                        selected_columns[pos]: row[idx] if idx < len(row) else None
+                        for pos, idx in enumerate(col_idx)
+                    }
+                )
+        finally:
+            wb.close()
+        return pd.DataFrame(rows, columns=list(selected_columns))
+
+    if ext == ".csv":
+        sep = detect_csv_separator(file_bytes)
+        if sep is None:
+            return pd.DataFrame(columns=list(selected_columns))
+        return pd.read_csv(BytesIO(file_bytes), sep=sep, usecols=list(selected_columns))
+
+    return pd.DataFrame(columns=list(selected_columns))
 
 
 st.set_page_config(page_title="Audit Sampling - Key Items & Items", layout="wide")
@@ -194,28 +276,17 @@ if uploaded_file is None:
     st.stop()
 
 ext = os.path.splitext(uploaded_file.name)[1].lower()
-if ext == ".xlsx":
-    df = pd.read_excel(uploaded_file)
-elif ext == ".csv":
-    found = False
-    for sep in [",", ";", "\t"]:
-        uploaded_file.seek(0)
-        try:
-            df = pd.read_csv(uploaded_file, sep=sep)
-            if len(df.columns) > 1:
-                found = True
-                break
-        except Exception:
-            continue
-    if not found:
-        st.error("CSV non valido. Usa separatore virgola, punto e virgola o tab.")
-        st.stop()
-else:
+if ext not in [".xlsx", ".csv"]:
     st.error("Formato file non supportato.")
     st.stop()
 
-if df.empty:
-    st.error("File caricato vuoto.")
+file_bytes = uploaded_file.getvalue()
+colonne = get_file_columns(file_bytes, ext)
+if not colonne:
+    if ext == ".csv":
+        st.error("CSV non valido. Usa separatore virgola, punto e virgola o tab.")
+    else:
+        st.error("File Excel vuoto o non leggibile.")
     st.stop()
 
 st.sidebar.header("Informazioni revisione")
@@ -230,7 +301,6 @@ preparato_da = st.sidebar.text_input("Preparato da")
 data_ora = datetime.now().strftime("%d/%m/%Y %H:%M")
 
 st.sidebar.header("Mappatura colonne")
-colonne = df.columns.tolist()
 if len(colonne) < 3:
     st.error("Il file deve contenere almeno 3 colonne.")
     st.stop()
@@ -241,14 +311,24 @@ if len({codice_col, descr_col, valore_col}) < 3:
     st.warning("Le colonne devono essere diverse.")
     st.stop()
 
+with st.spinner("Caricamento dati selezionati in corso..."):
+    df = load_selected_columns(file_bytes, ext, (codice_col, descr_col, valore_col))
+
+if df.empty:
+    st.error("File caricato vuoto o senza righe dati.")
+    st.stop()
+
 st.sidebar.header("Parametri di campionamento")
-soglia_tipo = st.sidebar.radio("Tipo soglia Key Items", ["Percentuale sul totale", "Soglia numerica"])
+soglia_tipo = st.sidebar.radio("Tipo soglia Key Items", ["Percentuale sul totale", "Soglia numerica", "Nessun Key Item"])
 if soglia_tipo == "Percentuale sul totale":
     perc_key = st.sidebar.number_input("Soglia Key Items (%)", 0, 100, 30)
     soglia_key_num = None
-else:
+elif soglia_tipo == "Soglia numerica":
     soglia_key_num = st.sidebar.number_input("Soglia Key Items (EUR)", min_value=0.0, value=10000.0, step=100.0, format="%.2f")
     perc_key = None
+else:
+    perc_key = None
+    soglia_key_num = None
 
 materialita = st.sidebar.number_input("Materialita (EUR)", min_value=1.0, value=1_000_000.0)
 confidence_level = st.sidebar.number_input("Confidence Level (%)", 1, 100, 80)
@@ -261,8 +341,10 @@ starting_point_mode = None
 if metodo in ["MUS", "Intervallo"]:
     starting_point_mode = st.sidebar.radio("Selezione Starting Point", ["Automatica", "Manuale"])
     if starting_point_mode == "Manuale":
+        min_starting_point = 1.0 if metodo == "Intervallo" else 0.0
+        default_starting_point = 1.0 if metodo == "Intervallo" else 0.0
         manual_starting_point = st.sidebar.number_input(
-            "Inserisci valore Starting Point", min_value=0.0, value=0.0, step=1.0, format="%.2f"
+            "Inserisci valore Starting Point", min_value=min_starting_point, value=default_starting_point, step=1.0, format="%.2f"
         )
 
 df[valore_col] = df[valore_col].apply(parse_number_it)
@@ -280,10 +362,14 @@ top5_val = float(df_base.sort_values(by=valore_col, ascending=False).head(5)[val
 top5_perc = top5_val / tot_valore * 100 if tot_valore != 0 and tot_items >= 5 else 100.0
 
 st.subheader("Universo completo")
+preview_rows = 1000
+df_preview = df_base.head(preview_rows)
 st.dataframe(
-    df_base.style.format({valore_col: lambda x: format_number_it(x, 2)}),
+    with_display_index(df_preview).style.format({valore_col: lambda x: format_number_it(x, 2)}),
     width="stretch",
 )
+if len(df_base) > preview_rows:
+    st.caption(f"Visualizzate le prime {preview_rows} righe su {len(df_base):,} totali.")
 c1, c2, c3 = st.columns(3)
 c1.metric("Totale items", tot_items)
 c2.metric("Valore totale", format_number_it(tot_valore, 0))
@@ -300,12 +386,10 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
             soglia_key = tot_valore * perc_key / 100
             df_sorted["cumulativo"] = df_sorted[valore_col].cumsum()
             key_items = df_sorted[df_sorted["cumulativo"] <= soglia_key].copy()
-            if key_items.empty:
-                key_items = df_sorted.head(1)
-        else:
+        elif soglia_tipo == "Soglia numerica":
             key_items = df_sorted[df_sorted[valore_col] > soglia_key_num].copy()
-            if key_items.empty:
-                key_items = df_sorted.head(1)
+        else:
+            key_items = df_sorted.iloc[0:0].copy()
 
         residuo = df_sorted.drop(key_items.index).copy()
         residuo_tot = float(residuo[valore_col].sum())
@@ -337,14 +421,14 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
             residuo = df_base.drop(key_items.index)
             step = max(1, len(residuo) // num_items)
             if starting_point_mode == "Manuale" and manual_starting_point is not None:
-                start_idx = int(round(manual_starting_point))
+                start_idx = max(0, int(round(manual_starting_point)) - 1)
                 selected_items = residuo.iloc[start_idx::step].head(num_items)
-                starting_point = start_idx
+                starting_point = start_idx + 1
             else:
                 np.random.seed(42)
                 start_idx = np.random.randint(0, step)
                 selected_items = residuo.iloc[start_idx::step].head(num_items)
-                starting_point = start_idx
+                starting_point = start_idx + 1
         else:
             residuo = df_base.drop(key_items.index)
             np.random.seed(42)
@@ -379,14 +463,25 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
 
     st.subheader("Key Items")
     st.dataframe(
-        key_items[[codice_col, descr_col, valore_col]].style.format({valore_col: lambda x: format_number_it(x, 2)}),
+        with_display_index(key_items[[codice_col, descr_col, valore_col]]).style.format(
+            {valore_col: lambda x: format_number_it(x, 2)}
+        ),
         width="stretch",
     )
     st.subheader("Items selezionati")
     st.dataframe(
-        selected_items[[codice_col, descr_col, valore_col]].style.format({valore_col: lambda x: format_number_it(x, 2)}),
+        with_display_index(selected_items[[codice_col, descr_col, valore_col]]).style.format(
+            {valore_col: lambda x: format_number_it(x, 2)}
+        ),
         width="stretch",
     )
+    if soglia_tipo == "Nessun Key Item" and metodo == "MUS" and not selected_items.empty:
+        max_valore = float(df_base[valore_col].max())
+        if (selected_items[valore_col] == max_valore).any():
+            st.info(
+                "L'item di importo maggiore non e stato classificato come Key Item: "
+                "e stato selezionato dal metodo MUS come elemento del campione, comportamento fisiologico per questo metodo."
+            )
 
     st.subheader("Errori emersi e proiezione sull'universo")
     saldo_col = "Saldo corretto emerso (EUR)"
@@ -422,7 +517,7 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
     if not dettaglio_errori_con_errori.empty:
         st.write("Dettaglio items con errore")
         st.dataframe(
-            dettaglio_errori_con_errori.style.format(
+            with_display_index(dettaglio_errori_con_errori).style.format(
                 {
                     valore_col: lambda x: format_number_it(x, 2),
                     saldo_col: lambda x: format_number_it(x, 2),
