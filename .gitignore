@@ -1,0 +1,13 @@
+__pycache__/
+.streamlit/
+.venv/
+venv/
+*.pyc
+*.pyo
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*.docx
+*.png
+*_files/

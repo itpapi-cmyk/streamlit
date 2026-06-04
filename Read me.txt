@@ -1,0 +1,8 @@
+il programma app.py  riporta la soglia key item come percentuale e non prevede opzione starting point manuale.
+il programma app1.py è identico ad app.py (copia backup)
+il programma app2.py è uguale a app.py con queste modifiche:
+ 1) possibilità di scelta Key items come valori oltre a una certa soglia (es.>1.500.000) oppure come percentuale del totale (seleziona 30% dell'universo)
+ 2) opzione di scelta Starting point automatico oppure manuale. Se manuale appare il campo in cui inserire il valore di starting point. Da considerare che tale opzione vale solamente per MUS e Intervallo.
+il programma app3.py riporta il programma app2.py (backup)
+
+
