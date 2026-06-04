@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import altair as alt
 import re
 import os
 from io import BytesIO
@@ -75,6 +76,99 @@ def detect_csv_separator(file_bytes):
         except Exception:
             continue
     return None
+
+
+def render_universe_stratification(df, valore_col):
+    if df.empty:
+        return
+
+    strata = [
+        ("Top 1% (0%-1%)", 0.01),
+        (">1%-5%", 0.05),
+        (">5%-10%", 0.10),
+        (">10%-25%", 0.25),
+        (">25%-50%", 0.50),
+        (">50%-100%", 1.00),
+    ]
+    sorted_values = df[[valore_col]].sort_values(by=valore_col, ascending=False).reset_index(drop=True)
+    sorted_values["rank_pct"] = (np.arange(len(sorted_values)) + 1) / len(sorted_values)
+    previous_limit = 0.0
+    rows = []
+    for label, limit in strata:
+        mask = (sorted_values["rank_pct"] > previous_limit) & (sorted_values["rank_pct"] <= limit)
+        stratum_values = sorted_values.loc[mask, valore_col]
+        rows.append(
+            {
+                "Fascia": label,
+                "Da rank %": previous_limit * 100,
+                "A rank %": limit * 100,
+                "Numero items": int(stratum_values.count()),
+                "Valore": float(stratum_values.sum()),
+            }
+        )
+        previous_limit = limit
+
+    strat_df = pd.DataFrame(rows)
+    strat_df = strat_df[strat_df["Numero items"] > 0].reset_index(drop=True)
+    if strat_df.empty:
+        return
+
+    st.subheader("Stratificazione universo")
+    st.write("Valore per singolo item e valore progressivo, ordinati dal valore piu elevato")
+    chart_df = sorted_values[[valore_col]].copy()
+    chart_df["Numero item"] = np.arange(1, len(chart_df) + 1)
+    chart_df = chart_df.rename(columns={valore_col: "Valore"})
+    chart_df["Valore progressivo"] = chart_df["Valore"].cumsum()
+    totale_grafico = float(chart_df["Valore"].sum())
+    chart_df["Progressivo %"] = np.where(
+        totale_grafico != 0,
+        chart_df["Valore progressivo"] / totale_grafico * 100,
+        0.0,
+    )
+
+    bars = (
+        alt.Chart(chart_df)
+        .mark_bar(color="#2f5597", opacity=0.75)
+        .encode(
+            x=alt.X("Numero item:Q", title="Numero item"),
+            y=alt.Y("Valore:Q", title="Valore singolo item"),
+            tooltip=[
+                alt.Tooltip("Numero item:Q", title="Numero item", format=",.0f"),
+                alt.Tooltip("Valore:Q", title="Valore", format=",.2f"),
+                alt.Tooltip("Valore progressivo:Q", title="Valore progressivo", format=",.2f"),
+                alt.Tooltip("Progressivo %:Q", title="Progressivo %", format=".2f"),
+            ],
+        )
+    )
+    line = (
+        alt.Chart(chart_df)
+        .mark_line(color="#c55a11", strokeWidth=2.5)
+        .encode(
+            x=alt.X("Numero item:Q", title="Numero item"),
+            y=alt.Y("Valore progressivo:Q", title="Valore progressivo"),
+            tooltip=[
+                alt.Tooltip("Numero item:Q", title="Numero item", format=",.0f"),
+                alt.Tooltip("Valore progressivo:Q", title="Valore progressivo", format=",.2f"),
+                alt.Tooltip("Progressivo %:Q", title="Progressivo %", format=".2f"),
+            ],
+        )
+    )
+    st.altair_chart((bars + line).resolve_scale(y="independent"), use_container_width=True)
+    st.caption(
+        "Ogni barra rappresenta un item dell'universo; la linea mostra il valore progressivo cumulato."
+    )
+
+    st.dataframe(
+        with_display_index(strat_df).style.format(
+            {
+                "Da rank %": lambda x: format_number_it(x, 0),
+                "A rank %": lambda x: format_number_it(x, 0),
+                "Numero items": lambda x: format_number_it(x, 0),
+                "Valore": lambda x: format_number_it(x, 0),
+            }
+        ),
+        width="stretch",
+    )
 
 
 @st.cache_data(show_spinner=False)
@@ -318,6 +412,11 @@ if df.empty:
     st.error("File caricato vuoto o senza righe dati.")
     st.stop()
 
+if "mostra_grafico_universo" not in st.session_state:
+    st.session_state["mostra_grafico_universo"] = False
+if st.sidebar.button("Mostra/Nascondi grafico universo"):
+    st.session_state["mostra_grafico_universo"] = not st.session_state["mostra_grafico_universo"]
+
 st.sidebar.header("Parametri di campionamento")
 soglia_tipo = st.sidebar.radio("Tipo soglia Key Items", ["Percentuale sul totale", "Soglia numerica", "Nessun Key Item"])
 if soglia_tipo == "Percentuale sul totale":
@@ -383,6 +482,9 @@ c1, c2, c3 = st.columns(3)
 c1.metric("Totale items", tot_items)
 c2.metric("Valore totale", format_number_it(tot_valore, 0))
 c3.metric("Top 5 (% valore)", f"{top5_perc:.2f}%")
+
+if st.session_state.get("mostra_grafico_universo"):
+    render_universe_stratification(df_base, valore_col)
 
 if calcola_campione or ("key_items" in st.session_state and "items_selezionati" in st.session_state):
     if calcola_campione:
@@ -521,6 +623,22 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
     dettaglio_errori[errore_col] = errore_importo
     dettaglio_errori[errore_perc_col] = errore_perc
     dettaglio_errori_con_errori = dettaglio_errori[np.abs(dettaglio_errori[errore_col]) > 1e-12]
+    dettaglio_errori_export = dettaglio_errori_con_errori.copy()
+    if not dettaglio_errori_export.empty:
+        totale_valore_errori = float(dettaglio_errori_export[valore_col].sum())
+        totale_errore_errori = float(dettaglio_errori_export[errore_col].sum())
+        totale_errori_row = {
+            codice_col: "Totale",
+            descr_col: "",
+            valore_col: totale_valore_errori,
+            saldo_col: dettaglio_errori_export[saldo_col].sum(),
+            errore_col: totale_errore_errori,
+            errore_perc_col: np.nan,
+        }
+        dettaglio_errori_export = pd.concat(
+            [dettaglio_errori_export, pd.DataFrame([totale_errori_row])],
+            ignore_index=True,
+        )
     universo_no_key_items = max(0.0, float(tot_valore - key_items[valore_col].sum()))
     valore_campione_selezionato = float(selected_items[valore_col].sum())
 
@@ -543,7 +661,7 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
     if not dettaglio_errori_con_errori.empty:
         st.write("Dettaglio items con errore")
         st.dataframe(
-            with_display_index(dettaglio_errori_con_errori).style.format(
+            with_display_index(dettaglio_errori_export).style.format(
                 {
                     valore_col: lambda x: format_number_it(x, 2),
                     saldo_col: lambda x: format_number_it(x, 2),
@@ -613,7 +731,7 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
         )
         mle_info_df = pd.DataFrame(mle_info_rows, columns=["Parametro", "Valore"])
         mle_info_df.to_excel(writer, sheet_name="Errori e MLE", index=False, startrow=0)
-        dettaglio_errori_con_errori.to_excel(writer, sheet_name="Errori e MLE", index=False, startrow=mle_info_df.shape[0] + 2)
+        dettaglio_errori_export.to_excel(writer, sheet_name="Errori e MLE", index=False, startrow=mle_info_df.shape[0] + 2)
     excel_buffer.seek(0)
 
     st.download_button(
@@ -660,13 +778,13 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
 
         doc.add_paragraph("\nDettaglio items con errore")
         headers = [codice_col, descr_col, valore_col, saldo_col, errore_col, errore_perc_col]
-        te = doc.add_table(rows=len(dettaglio_errori_con_errori) + 1, cols=len(headers))
+        te = doc.add_table(rows=len(dettaglio_errori_export) + 1, cols=len(headers))
         for j, h in enumerate(headers):
             te.cell(0, j).text = h
-        for i, row in enumerate(dettaglio_errori_con_errori[headers].itertuples(index=False)):
+        for i, row in enumerate(dettaglio_errori_export[headers].itertuples(index=False)):
             for j, v in enumerate(row):
                 col_name = headers[j]
-                if col_name in [errore_col, errore_perc_col]:
+                if col_name in [valore_col, saldo_col, errore_col, errore_perc_col]:
                     num_v = pd.to_numeric(v, errors="coerce")
                     te.cell(i + 1, j).text = "" if pd.isna(num_v) else f"{num_v:.2f}"
                 else:
