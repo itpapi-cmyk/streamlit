@@ -347,6 +347,15 @@ if metodo in ["MUS", "Intervallo"]:
             "Inserisci valore Starting Point", min_value=min_starting_point, value=default_starting_point, step=1.0, format="%.2f"
         )
 
+errore_atteso_perc = st.sidebar.slider("Errore atteso (%)", min_value=0, max_value=70, value=0, step=1)
+errore_atteso_valore = materialita * errore_atteso_perc / 100
+materialita_net_benchmark = materialita - errore_atteso_valore
+st.sidebar.info(
+    f"Errore atteso: {format_number_it(errore_atteso_valore, 0)} EUR\n\n"
+    f"Materialita netta per campionamento: {format_number_it(materialita_net_benchmark, 0)} EUR"
+)
+calcola_campione = st.sidebar.button("Calcola selezione campione")
+
 df[valore_col] = df[valore_col].apply(parse_number_it)
 valori_non_validi = int(df[valore_col].isna().sum())
 df = df.dropna(subset=[valore_col]).reset_index(drop=True)
@@ -375,7 +384,6 @@ c1.metric("Totale items", tot_items)
 c2.metric("Valore totale", format_number_it(tot_valore, 0))
 c3.metric("Top 5 (% valore)", f"{top5_perc:.2f}%")
 
-calcola_campione = st.button("Calcola selezione campione")
 if calcola_campione or ("key_items" in st.session_state and "items_selezionati" in st.session_state):
     if calcola_campione:
         if "errori_editor" in st.session_state:
@@ -394,7 +402,7 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
         residuo = df_sorted.drop(key_items.index).copy()
         residuo_tot = float(residuo[valore_col].sum())
         confidence_factor = 100 * (1 - ((100 - confidence_level) / 100) ** (1 / 100))
-        num_items = int(round((residuo_tot / materialita) * confidence_factor))
+        num_items = int(round((residuo_tot / materialita_net_benchmark) * confidence_factor))
         num_items = max(num_items, 1)
 
         selected_items = pd.DataFrame(columns=df_sorted.columns)
@@ -507,12 +515,30 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
     errore_importo = saldi_corretti - valori_originali
     errore_perc = np.where(valori_originali != 0, (errore_importo / valori_originali) * 100, 0.0)
     somma_perc_errori = float(np.nansum(errore_perc))
-    mle = (somma_perc_errori / 100) * intervallo_utilizzato
+    somma_tainting_rate = somma_perc_errori / 100
 
     dettaglio_errori = errori_editati[[codice_col, descr_col, valore_col, saldo_col]].copy()
     dettaglio_errori[errore_col] = errore_importo
     dettaglio_errori[errore_perc_col] = errore_perc
     dettaglio_errori_con_errori = dettaglio_errori[np.abs(dettaglio_errori[errore_col]) > 1e-12]
+    universo_no_key_items = max(0.0, float(tot_valore - key_items[valore_col].sum()))
+    valore_campione_selezionato = float(selected_items[valore_col].sum())
+
+    if metodo == "MUS":
+        mle = somma_tainting_rate * intervallo_utilizzato
+        formula_mle = (
+            "Calcolo MLE (MUS): Somma tainting rate x Intervallo utilizzato = "
+            f"{somma_tainting_rate:.6f} x {format_number_it(intervallo_utilizzato, 2)} = {format_number_it(mle, 2)}"
+        )
+    else:
+        totale_errore = float(np.nansum(errore_importo))
+        tasso_errore = totale_errore / valore_campione_selezionato if valore_campione_selezionato else 0.0
+        mle = tasso_errore * universo_no_key_items
+        formula_mle = (
+            "Calcolo MLE (metodo non MUS): Errore totale / Totale campione selezionato x Universo (no key items) = "
+            f"{format_number_it(totale_errore, 2)} / {format_number_it(valore_campione_selezionato, 2)} x "
+            f"{format_number_it(universo_no_key_items, 2)} = {format_number_it(mle, 2)}"
+        )
 
     if not dettaglio_errori_con_errori.empty:
         st.write("Dettaglio items con errore")
@@ -530,21 +556,39 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
     else:
         st.write("Nessun errore rilevato negli items selezionati.")
 
-    universo_no_key_items = max(0.0, float(tot_valore - key_items[valore_col].sum()))
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Universo (no key items)", format_number_it(universo_no_key_items, 0))
     m2.metric("Items selezionati", len(errori_editati))
-    m3.metric("Intervallo utilizzato", format_number_it(intervallo_utilizzato, 0))
-    m4.metric("Somma % errori", f"{somma_perc_errori:.4f}%")
+    m3.metric("Valore items selezionati", format_number_it(valore_campione_selezionato, 0))
+    m4.metric("Intervallo utilizzato", format_number_it(intervallo_utilizzato, 0))
     m5.metric("Most likely error (MLE)", format_number_it(mle, 0))
+    st.info(formula_mle)
     st.write("nella determinazione del MLE si sono considerati sia gli errori negativi che gli errori positivi")
 
     excel_buffer = BytesIO()
     with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
         info_df = pd.DataFrame(
             {
-                "Parametro": ["Societa", "Revisione al", "Preparato da", "Materialita", "Confidence level"],
-                "Valore": [societa, revisione_al_str, preparato_da, euro(materialita), f"{confidence_level}%"],
+                "Parametro": [
+                    "Societa",
+                    "Revisione al",
+                    "Preparato da",
+                    "Materialita",
+                    "Errore atteso (%)",
+                    "Errore atteso (EUR)",
+                    "Materialita netta per campionamento",
+                    "Confidence level",
+                ],
+                "Valore": [
+                    societa,
+                    revisione_al_str,
+                    preparato_da,
+                    euro(materialita),
+                    f"{errore_atteso_perc}%",
+                    euro(errore_atteso_valore),
+                    euro(materialita_net_benchmark),
+                    f"{confidence_level}%",
+                ],
             }
         )
         info_df.to_excel(writer, sheet_name="Riepilogo", index=False, startrow=0)
@@ -552,26 +596,22 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
         key_items[[codice_col, descr_col, valore_col]].to_excel(writer, sheet_name="Key Items", index=False)
         selected_items[[codice_col, descr_col, valore_col]].to_excel(writer, sheet_name="Items selezionati", index=False)
 
-        mle_info_df = pd.DataFrame(
-            {
-                "Parametro": [
-                    "Universo (no key items)",
-                    "Items selezionati",
-                    "Intervallo utilizzato",
-                    "Somma % errori",
-                    "Most likely error (MLE)",
-                    "Nota",
-                ],
-                "Valore": [
-                    format_number_it(universo_no_key_items, 0),
-                    len(errori_editati),
-                    intervallo_utilizzato,
-                    somma_perc_errori,
-                    mle,
-                    "nella determinazione del MLE si sono considerati sia gli errori negativi che gli errori positivi",
-                ],
-            }
+        mle_info_rows = [
+            ("Universo (no key items)", format_number_it(universo_no_key_items, 0)),
+            ("Items selezionati", len(errori_editati)),
+            ("Valore items selezionati", valore_campione_selezionato),
+            ("Intervallo utilizzato", intervallo_utilizzato),
+        ]
+        if metodo == "MUS":
+            mle_info_rows.append(("Somma tainting rate", somma_tainting_rate))
+        mle_info_rows.extend(
+            [
+                ("Calcolo MLE", formula_mle),
+                ("Most likely error (MLE)", mle),
+                ("Nota", "nella determinazione del MLE si sono considerati sia gli errori negativi che gli errori positivi"),
+            ]
         )
+        mle_info_df = pd.DataFrame(mle_info_rows, columns=["Parametro", "Valore"])
         mle_info_df.to_excel(writer, sheet_name="Errori e MLE", index=False, startrow=0)
         dettaglio_errori_con_errori.to_excel(writer, sheet_name="Errori e MLE", index=False, startrow=mle_info_df.shape[0] + 2)
     excel_buffer.seek(0)
@@ -595,6 +635,10 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
         if starting_point is not None:
             doc.add_paragraph(f"Starting point: {starting_point:.2f}")
         doc.add_paragraph(f"Materialita: {euro(materialita)}  |  Confidence level: {confidence_level}%")
+        doc.add_paragraph(
+            f"Errore atteso: {errore_atteso_perc}% ({euro(errore_atteso_valore)})  |  "
+            f"Materialita netta per campionamento: {euro(materialita_net_benchmark)}"
+        )
         doc.add_paragraph("\nRiepilogo selezione")
         t = doc.add_table(rows=riepilogo.shape[0] + 1, cols=riepilogo.shape[1])
         for j, col in enumerate(riepilogo.columns):
@@ -606,8 +650,11 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
         doc.add_paragraph("\nMost likely error (MLE)")
         doc.add_paragraph(f"Universo (no key items): {format_number_it(universo_no_key_items, 0)}")
         doc.add_paragraph(f"Items selezionati: {len(errori_editati)}")
+        doc.add_paragraph(f"Valore items selezionati: {format_number_it(valore_campione_selezionato, 0)}")
         doc.add_paragraph(f"Intervallo utilizzato: {format_number_it(intervallo_utilizzato, 0)}")
-        doc.add_paragraph(f"Somma % errori: {somma_perc_errori:.4f}%")
+        if metodo == "MUS":
+            doc.add_paragraph(f"Somma tainting rate: {somma_tainting_rate:.6f}")
+        doc.add_paragraph(formula_mle)
         doc.add_paragraph(f"Most likely error (MLE): {format_number_it(mle, 0)}")
         doc.add_paragraph("nella determinazione del MLE si sono considerati sia gli errori negativi che gli errori positivi")
 
