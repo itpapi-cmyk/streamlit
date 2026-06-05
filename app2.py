@@ -229,6 +229,7 @@ def load_selected_columns(file_bytes, ext, selected_columns):
 
 st.set_page_config(page_title="Audit Sampling - Key Items & Items", layout="wide")
 st.title("Selezione campione - Key Items e Items")
+st.caption("Versione con riepilogo Selezioni teoriche / Items unici effettivi")
 
 with st.sidebar.expander("Metodologia e funzionamento del programma"):
     st.markdown(
@@ -506,6 +507,7 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
         confidence_factor = 100 * (1 - ((100 - confidence_level) / 100) ** (1 / 100))
         num_items = int(round((residuo_tot / materialita_net_benchmark) * confidence_factor))
         num_items = max(num_items, 1)
+        num_items_teorici = num_items
 
         selected_items = pd.DataFrame(columns=df_sorted.columns)
         starting_point = None
@@ -544,32 +546,53 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
             np.random.seed(42)
             selected_items = residuo.sample(n=min(num_items, len(residuo)), random_state=42)
 
-        intervallo_utilizzato = residuo_tot / len(selected_items) if len(selected_items) > 0 else 0.0
+        if metodo == "MUS":
+            intervallo_utilizzato = residuo_tot / num_items_teorici if num_items_teorici > 0 else 0.0
+        else:
+            intervallo_utilizzato = residuo_tot / len(selected_items) if len(selected_items) > 0 else 0.0
         st.session_state["key_items"] = key_items
         st.session_state["items_selezionati"] = selected_items
+        st.session_state["num_items_teorici"] = num_items_teorici
         st.session_state["starting_point"] = starting_point
         st.session_state["intervallo_utilizzato"] = intervallo_utilizzato
     else:
         key_items = st.session_state["key_items"]
         selected_items = st.session_state["items_selezionati"]
+        num_items_teorici = st.session_state.get("num_items_teorici", len(selected_items))
         starting_point = st.session_state.get("starting_point")
         intervallo_utilizzato = st.session_state.get("intervallo_utilizzato", 0.0)
 
     riepilogo = pd.DataFrame(
         {
-            "Categoria": ["Universo", "Key Items", "Items selezionati"],
-            "Numero items": [tot_items, len(key_items), len(selected_items)],
-            "Valore (EUR)": [euro(tot_valore), euro(key_items[valore_col].sum()), euro(selected_items[valore_col].sum())],
+            "Categoria": ["Universo", "Key Items", "Selezioni teoriche", "Items unici selezionati"],
+            "Numero items": [tot_items, len(key_items), num_items_teorici, len(selected_items)],
+            "Valore (EUR)": [
+                euro(tot_valore),
+                euro(key_items[valore_col].sum()),
+                "-",
+                euro(selected_items[valore_col].sum()),
+            ],
             "% su totale": [
                 "100.00%",
                 f"{key_items[valore_col].sum()/tot_valore*100:.2f}%" if tot_valore else "0.00%",
+                "-",
                 f"{selected_items[valore_col].sum()/tot_valore*100:.2f}%" if tot_valore else "0.00%",
             ],
-            "Starting point": ["-", "-", f"{starting_point:.2f}" if starting_point is not None else "-"],
+            "Starting point": ["-", "-", "-", f"{starting_point:.2f}" if starting_point is not None else "-"],
         }
     )
     st.subheader("Riepilogo selezione")
     st.table(riepilogo)
+    selezioni_duplicate_mus = max(0, num_items_teorici - len(selected_items)) if metodo == "MUS" else 0
+    if metodo == "MUS" and num_items_teorici > len(selected_items):
+        st.info(
+            f"Nel metodo MUS {num_items_teorici} selezioni teoriche hanno prodotto "
+            f"{len(selected_items)} item unici: {selezioni_duplicate_mus} selezioni "
+            "sono ricadute su item gia selezionati. "
+            "Il revisore puo valutare, sulla base del proprio giudizio professionale, "
+            "se integrare il campione con ulteriori item dal residuo non selezionato, "
+            "fino a raggiungere il numero teorico di selezioni."
+        )
 
     st.subheader("Key Items")
     st.dataframe(
@@ -674,12 +697,13 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
     else:
         st.write("Nessun errore rilevato negli items selezionati.")
 
-    m1, m2, m3, m4, m5 = st.columns(5)
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("Universo (no key items)", format_number_it(universo_no_key_items, 0))
-    m2.metric("Items selezionati", len(errori_editati))
-    m3.metric("Valore items selezionati", format_number_it(valore_campione_selezionato, 0))
-    m4.metric("Intervallo utilizzato", format_number_it(intervallo_utilizzato, 0))
-    m5.metric("Most likely error (MLE)", format_number_it(mle, 0))
+    m2.metric("Selezioni teoriche", num_items_teorici)
+    m3.metric("Items unici selezionati", len(errori_editati))
+    m4.metric("Valore items selezionati", format_number_it(valore_campione_selezionato, 0))
+    m5.metric("Intervallo utilizzato", format_number_it(intervallo_utilizzato, 0))
+    m6.metric("Most likely error (MLE)", format_number_it(mle, 0))
     st.info(formula_mle)
     st.write("nella determinazione del MLE si sono considerati sia gli errori negativi che gli errori positivi")
 
@@ -716,7 +740,8 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
 
         mle_info_rows = [
             ("Universo (no key items)", format_number_it(universo_no_key_items, 0)),
-            ("Items selezionati", len(errori_editati)),
+            ("Selezioni teoriche", num_items_teorici),
+            ("Items unici selezionati", len(errori_editati)),
             ("Valore items selezionati", valore_campione_selezionato),
             ("Intervallo utilizzato", intervallo_utilizzato),
         ]
@@ -767,7 +792,8 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
 
         doc.add_paragraph("\nMost likely error (MLE)")
         doc.add_paragraph(f"Universo (no key items): {format_number_it(universo_no_key_items, 0)}")
-        doc.add_paragraph(f"Items selezionati: {len(errori_editati)}")
+        doc.add_paragraph(f"Selezioni teoriche: {num_items_teorici}")
+        doc.add_paragraph(f"Items unici selezionati: {len(errori_editati)}")
         doc.add_paragraph(f"Valore items selezionati: {format_number_it(valore_campione_selezionato, 0)}")
         doc.add_paragraph(f"Intervallo utilizzato: {format_number_it(intervallo_utilizzato, 0)}")
         if metodo == "MUS":
