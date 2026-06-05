@@ -431,7 +431,14 @@ else:
     soglia_key_num = None
 
 materialita = st.sidebar.number_input("Materialita (EUR)", min_value=1.0, value=1_000_000.0)
-confidence_level = st.sidebar.number_input("Confidence Level (%)", 1, 100, 80)
+confidence_level = st.sidebar.number_input(
+    "Confidence Level (%)",
+    min_value=1.0,
+    max_value=100.0,
+    value=80.0,
+    step=0.1,
+    format="%.1f",
+)
 
 st.sidebar.header("Metodo selezione Items")
 metodo = st.sidebar.radio("", ["MUS", "Intervallo", "Casuale"])
@@ -486,6 +493,34 @@ c3.metric("Top 5 (% valore)", f"{top5_perc:.2f}%")
 
 if st.session_state.get("mostra_grafico_universo"):
     render_universe_stratification(df_base, valore_col)
+
+selection_signature = (
+    uploaded_file.name,
+    len(file_bytes),
+    codice_col,
+    descr_col,
+    valore_col,
+    soglia_tipo,
+    perc_key,
+    soglia_key_num,
+    materialita,
+    confidence_level,
+    metodo,
+    starting_point_mode,
+    manual_starting_point,
+    errore_atteso_perc,
+)
+if st.session_state.get("selection_signature") != selection_signature:
+    for key in [
+        "key_items",
+        "items_selezionati",
+        "num_items_teorici",
+        "starting_point",
+        "intervallo_utilizzato",
+        "errori_editor",
+    ]:
+        st.session_state.pop(key, None)
+    st.session_state["selection_signature"] = selection_signature
 
 if calcola_campione or ("key_items" in st.session_state and "items_selezionati" in st.session_state):
     if calcola_campione:
