@@ -386,12 +386,12 @@ if not colonne:
 
 st.sidebar.header("Informazioni revisione")
 societa = st.sidebar.text_input("Societa")
-revisione_al_str = st.sidebar.text_input("Revisione al (GG/MM/AA)", value=datetime.now().strftime("%d/%m/%y"))
+revisione_al_str = st.sidebar.text_input("Revisione al (GG/MM/AAAA)", value=datetime.now().strftime("%d/%m/%Y"))
 try:
-    datetime.strptime(revisione_al_str, "%d/%m/%y")
+    datetime.strptime(revisione_al_str, "%d/%m/%Y")
 except ValueError:
     st.sidebar.warning("Formato data non valido. Uso data odierna.")
-    revisione_al_str = datetime.now().strftime("%d/%m/%y")
+    revisione_al_str = datetime.now().strftime("%d/%m/%Y")
 preparato_da = st.sidebar.text_input("Preparato da")
 data_ora = datetime.now().strftime("%d/%m/%Y %H:%M")
 
@@ -732,13 +732,12 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
     else:
         st.write("Nessun errore rilevato negli items selezionati.")
 
-    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Universo (no key items)", format_number_it(universo_no_key_items, 0))
-    m2.metric("Selezioni teoriche", num_items_teorici)
-    m3.metric("Items unici selezionati", len(errori_editati))
-    m4.metric("Valore items selezionati", format_number_it(valore_campione_selezionato, 0))
-    m5.metric("Intervallo utilizzato", format_number_it(intervallo_utilizzato, 0))
-    m6.metric("Most likely error (MLE)", format_number_it(mle, 0))
+    m2.metric("Items effettivi selezionati", len(errori_editati))
+    m3.metric("Valore items selezionati", format_number_it(valore_campione_selezionato, 0))
+    m4.metric("Intervallo utilizzato", format_number_it(intervallo_utilizzato, 0))
+    m5.metric("Most likely error (MLE)", format_number_it(mle, 0))
     st.info(formula_mle)
     st.write("nella determinazione del MLE si sono considerati sia gli errori negativi che gli errori positivi")
 
@@ -775,8 +774,7 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
 
         mle_info_rows = [
             ("Universo (no key items)", format_number_it(universo_no_key_items, 0)),
-            ("Selezioni teoriche", num_items_teorici),
-            ("Items unici selezionati", len(errori_editati)),
+            ("Items effettivi selezionati", len(errori_editati)),
             ("Valore items selezionati", valore_campione_selezionato),
             ("Intervallo utilizzato", intervallo_utilizzato),
         ]
@@ -827,8 +825,7 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
 
         doc.add_paragraph("\nMost likely error (MLE)")
         doc.add_paragraph(f"Universo (no key items): {format_number_it(universo_no_key_items, 0)}")
-        doc.add_paragraph(f"Selezioni teoriche: {num_items_teorici}")
-        doc.add_paragraph(f"Items unici selezionati: {len(errori_editati)}")
+        doc.add_paragraph(f"Items effettivi selezionati: {len(errori_editati)}")
         doc.add_paragraph(f"Valore items selezionati: {format_number_it(valore_campione_selezionato, 0)}")
         doc.add_paragraph(f"Intervallo utilizzato: {format_number_it(intervallo_utilizzato, 0)}")
         if metodo == "MUS":
