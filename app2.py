@@ -172,11 +172,20 @@ def render_universe_stratification(df, valore_col):
 
 
 @st.cache_data(show_spinner=False)
-def get_file_columns(file_bytes, ext):
+def get_excel_sheet_names(file_bytes):
+    wb = load_workbook(BytesIO(file_bytes), read_only=True, data_only=True)
+    try:
+        return wb.sheetnames
+    finally:
+        wb.close()
+
+
+@st.cache_data(show_spinner=False)
+def get_file_columns(file_bytes, ext, sheet_name=None):
     if ext == ".xlsx":
         wb = load_workbook(BytesIO(file_bytes), read_only=True, data_only=True)
         try:
-            ws = wb.worksheets[0]
+            ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.worksheets[0]
             header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
         finally:
             wb.close()
@@ -195,11 +204,11 @@ def get_file_columns(file_bytes, ext):
 
 
 @st.cache_data(show_spinner=False)
-def load_selected_columns(file_bytes, ext, selected_columns):
+def load_selected_columns(file_bytes, ext, selected_columns, sheet_name=None):
     if ext == ".xlsx":
         wb = load_workbook(BytesIO(file_bytes), read_only=True, data_only=True)
         try:
-            ws = wb.worksheets[0]
+            ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.worksheets[0]
             header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
             if not header_row:
                 return pd.DataFrame(columns=list(selected_columns))
@@ -376,7 +385,15 @@ if ext not in [".xlsx", ".csv"]:
     st.stop()
 
 file_bytes = uploaded_file.getvalue()
-colonne = get_file_columns(file_bytes, ext)
+sheet_name = None
+if ext == ".xlsx":
+    sheet_names = get_excel_sheet_names(file_bytes)
+    if not sheet_names:
+        st.error("File Excel senza fogli leggibili.")
+        st.stop()
+    sheet_name = st.selectbox("Foglio Excel da caricare", sheet_names, index=0)
+
+colonne = get_file_columns(file_bytes, ext, sheet_name)
 if not colonne:
     if ext == ".csv":
         st.error("CSV non valido. Usa separatore virgola, punto e virgola o tab.")
@@ -407,7 +424,7 @@ if len({codice_col, descr_col, valore_col}) < 3:
     st.stop()
 
 with st.spinner("Caricamento dati selezionati in corso..."):
-    df = load_selected_columns(file_bytes, ext, (codice_col, descr_col, valore_col))
+    df = load_selected_columns(file_bytes, ext, (codice_col, descr_col, valore_col), sheet_name)
 
 if df.empty:
     st.error("File caricato vuoto o senza righe dati.")
@@ -497,6 +514,7 @@ if st.session_state.get("mostra_grafico_universo"):
 selection_signature = (
     uploaded_file.name,
     len(file_bytes),
+    sheet_name,
     codice_col,
     descr_col,
     valore_col,
@@ -754,6 +772,8 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
                     "Errore atteso (EUR)",
                     "Materialita netta per campionamento",
                     "Confidence level",
+                    "Metodo selezione Items",
+                    "Starting point",
                 ],
                 "Valore": [
                     societa,
@@ -764,6 +784,8 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
                     euro(errore_atteso_valore),
                     euro(materialita_net_benchmark),
                     f"{confidence_level}%",
+                    metodo,
+                    f"{starting_point:.2f}" if starting_point is not None else "-",
                 ],
             }
         )
