@@ -67,6 +67,14 @@ def with_display_index(df):
     return displayed_df
 
 
+def format_display_df(df, numeric_formats):
+    displayed_df = with_display_index(df)
+    for col, decimals in numeric_formats.items():
+        if col in displayed_df.columns:
+            displayed_df[col] = displayed_df[col].apply(lambda x, d=decimals: format_number_it(x, d))
+    return displayed_df
+
+
 def detect_csv_separator(file_bytes):
     for sep in [",", ";", "\t"]:
         try:
@@ -159,15 +167,11 @@ def render_universe_stratification(df, valore_col):
     )
 
     st.dataframe(
-        with_display_index(strat_df).style.format(
-            {
-                "Da rank %": lambda x: format_number_it(x, 0),
-                "A rank %": lambda x: format_number_it(x, 0),
-                "Numero items": lambda x: format_number_it(x, 0),
-                "Valore": lambda x: format_number_it(x, 0),
-            }
+        format_display_df(
+            strat_df,
+            {"Da rank %": 0, "A rank %": 0, "Numero items": 0, "Valore": 0},
         ),
-        width="stretch",
+        use_container_width=True,
     )
 
 
@@ -498,8 +502,8 @@ st.subheader("Universo completo")
 preview_rows = 1000
 df_preview = df_base.head(preview_rows)
 st.dataframe(
-    with_display_index(df_preview).style.format({valore_col: lambda x: format_number_it(x, 2)}),
-    width="stretch",
+    format_display_df(df_preview, {valore_col: 2}),
+    use_container_width=True,
 )
 if len(df_base) > preview_rows:
     st.caption(f"Visualizzate le prime {preview_rows} righe su {len(df_base):,} totali.")
@@ -649,17 +653,13 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
 
     st.subheader("Key Items")
     st.dataframe(
-        with_display_index(key_items[[codice_col, descr_col, valore_col]]).style.format(
-            {valore_col: lambda x: format_number_it(x, 2)}
-        ),
-        width="stretch",
+        format_display_df(key_items[[codice_col, descr_col, valore_col]], {valore_col: 2}),
+        use_container_width=True,
     )
     st.subheader("Items selezionati")
     st.dataframe(
-        with_display_index(selected_items[[codice_col, descr_col, valore_col]]).style.format(
-            {valore_col: lambda x: format_number_it(x, 2)}
-        ),
-        width="stretch",
+        format_display_df(selected_items[[codice_col, descr_col, valore_col]], {valore_col: 2}),
+        use_container_width=True,
     )
     if soglia_tipo == "Nessun Key Item" and metodo == "MUS" and not selected_items.empty:
         max_valore = float(df_base[valore_col].max())
@@ -737,15 +737,11 @@ if calcola_campione or ("key_items" in st.session_state and "items_selezionati" 
     if not dettaglio_errori_con_errori.empty:
         st.write("Dettaglio items con errore")
         st.dataframe(
-            with_display_index(dettaglio_errori_export).style.format(
-                {
-                    valore_col: lambda x: format_number_it(x, 2),
-                    saldo_col: lambda x: format_number_it(x, 2),
-                    errore_col: lambda x: format_number_it(x, 2),
-                    errore_perc_col: lambda x: format_number_it(x, 4),
-                }
+            format_display_df(
+                dettaglio_errori_export,
+                {valore_col: 2, saldo_col: 2, errore_col: 2, errore_perc_col: 4},
             ),
-            width="stretch",
+            use_container_width=True,
         )
     else:
         st.write("Nessun errore rilevato negli items selezionati.")
